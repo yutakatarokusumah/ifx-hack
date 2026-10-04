@@ -129,7 +129,11 @@ def performance_chart(curves: pd.DataFrame) -> alt.Chart:
     )
     base = alt.Chart(data).encode(
         x=alt.X("date:T", title=None),
-        y=alt.Y("value:Q", title="Growth of $1"),
+        y=alt.Y(
+            "value:Q",
+            title="Growth of $1",
+            scale=alt.Scale(domainMin=0.8),
+        ),
         color=color,
         tooltip=[
             alt.Tooltip("date:T", title="Date"),
