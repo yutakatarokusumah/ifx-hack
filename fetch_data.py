@@ -3,6 +3,7 @@ import yfinance as yf
 
 
 TICKERS = ["0700.HK", "9988.HK", "3690.HK", "1810.HK", "9618.HK"]
+SAFE_HAVEN = "Cash"
 START_DATE = "1900-01-01"
 END_DATE = "2026-10-01"
 
@@ -26,6 +27,8 @@ def main() -> None:
 
     price_matrix = extract_field(raw_data, "Adj Close")
     volume_matrix = extract_field(raw_data, "Volume")
+    price_matrix[SAFE_HAVEN] = 100.0
+    volume_matrix[SAFE_HAVEN] = 0.0
     price_matrix.to_csv("price_matrix.csv")
     volume_matrix.to_csv("volume_matrix.csv")
     print(f"Data saved successfully! Total trading days: {len(price_matrix)}")

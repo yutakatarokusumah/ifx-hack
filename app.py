@@ -16,20 +16,20 @@ HORIZON = 5
 REBALANCE = 20
 SENSITIVITY = 1.0
 AGGRESSIVENESS = 3.0
+SAFE_HAVEN = "Cash"
 
 st.set_page_config(layout="wide")
 st.title("AI-driven dynamic index")
 st.caption("Walk-forward crisis protection versus an equal-weight index.")
 
 
-@st.cache_data
 def load_returns() -> pd.DataFrame:
     prices = pd.read_csv("price_matrix.csv", index_col=0, parse_dates=True)
     return prices.pct_change().dropna()
 
 
 def build_features(returns: pd.DataFrame) -> pd.DataFrame:
-    market = returns.mean(axis=1)
+    market = returns.drop(columns=SAFE_HAVEN, errors="ignore").mean(axis=1)
     return pd.DataFrame(
         {
             "vol_5d": market.rolling(5).std(),
@@ -42,11 +42,12 @@ def build_features(returns: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_graph(returns: pd.DataFrame, sensitivity: float) -> nx.Graph:
-    distances = np.sqrt(np.maximum(0, 2 - 2 * returns.corr().to_numpy()))
+    correlations = returns.corr().fillna(0)
+    distances = np.sqrt(np.maximum(0, 2 - 2 * correlations.to_numpy()))
     weights = 1 / np.power(distances + 1e-5, 1 + sensitivity)
     np.fill_diagonal(weights, 0)
     graph = nx.from_numpy_array(weights)
-    return nx.relabel_nodes(graph, dict(enumerate(returns.columns)))
+    return nx.relabel_nodes(graph, dict(enumerate(correlations.columns)))
 
 
 def graph_centrality(graph: nx.Graph) -> dict[str, float]:
@@ -84,8 +85,9 @@ def backtest(
             ticker: (1 - crisis_level) * equal + crisis_level * risk[ticker]
             for ticker in returns.columns
         }
-        realized = returns.iloc[position : position + HORIZON].mean(axis=1)
-        crisis = realized.std() > returns.mean(axis=1).rolling(20).std().quantile(
+        risk_returns = returns.drop(columns=SAFE_HAVEN, errors="ignore")
+        realized = risk_returns.iloc[position : position + HORIZON].mean(axis=1)
+        crisis = realized.std() > risk_returns.mean(axis=1).rolling(20).std().quantile(
             0.75
         )
         for day, row in returns.iloc[position : position + HORIZON].iterrows():
