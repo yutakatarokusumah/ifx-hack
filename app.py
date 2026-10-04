@@ -23,11 +23,6 @@ HORIZON = 5
 REBALANCE = 20
 SAFE_HAVEN = "Cash"
 BENCHMARK = "^HSI"
-SCENARIO_MARKETS = {
-    "Hang Seng Index": "^HSI",
-    "Shanghai Composite": "000001.SS",
-    "Singapore STI": "^STI",
-}
 BASKET_NAME = "Hang Seng Tech basket"
 EQUITY_LABEL = "Hang Seng Index (^HSI)"
 STRESS_SHOCKS = np.array(
@@ -71,31 +66,6 @@ def load_returns() -> pd.DataFrame:
                 "Run `fetch_data.py` to refresh the data."
             )
     return prices.pct_change().dropna()
-
-
-@st.cache_data(max_entries=8)
-def load_scenario_returns(
-    ticker: str, start: pd.Timestamp, end: pd.Timestamp
-) -> pd.Series:
-    try:
-        data = yf.download(
-            ticker,
-            start=start.date().isoformat(),
-            end=(end + pd.Timedelta(days=1)).date().isoformat(),
-            auto_adjust=False,
-            progress=False,
-        )
-    except (OSError, ValueError) as error:
-        raise RuntimeError(
-            f"Could not download regional scenario data for {ticker}."
-        ) from error
-    if data.empty:
-        raise RuntimeError(f"No data was returned for scenario index {ticker}.")
-    close = data["Adj Close"]
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    close.index = pd.to_datetime(close.index).tz_localize(None)
-    return close.pct_change().dropna().rename(ticker)
 
 
 def build_features(returns: pd.DataFrame) -> pd.DataFrame:
@@ -194,38 +164,21 @@ def performance(returns: pd.Series) -> tuple[float, float]:
 
 
 def stress_test(
-    returns: pd.DataFrame,
-    weights: dict[str, float],
-    scenario_returns: pd.Series,
+    returns: pd.DataFrame, weights: dict[str, float]
 ) -> pd.DataFrame:
     risk_assets = returns.drop(columns=[SAFE_HAVEN, BENCHMARK], errors="ignore")
-    aligned = risk_assets.join(scenario_returns.rename("scenario"), how="inner")
-    if len(aligned) < len(STRESS_SHOCKS):
-        raise RuntimeError(
-            "The selected regional scenario does not overlap enough with the "
-            "portfolio history to build a stress replay."
-        )
-    market = aligned["scenario"]
-    beta = aligned[risk_assets.columns].apply(
-        lambda column: column.cov(market) / market.var()
-    )
+    market = returns[BENCHMARK]
+    beta = risk_assets.apply(lambda column: column.cov(market) / market.var())
     beta[SAFE_HAVEN] = 0.0
-    shock_window = market.rolling(len(STRESS_SHOCKS)).sum().dropna()
-    shock_end = shock_window.index[shock_window.to_numpy().argmin()]
-    shock_end_position = market.index.get_loc(shock_end)
-    shocks = market.iloc[
-        shock_end_position - len(STRESS_SHOCKS) + 1 : shock_end_position + 1
-    ].to_numpy()
-    dates = pd.date_range("2008-09-15", periods=len(shocks))
     shocked_assets = pd.DataFrame(
-        np.outer(shocks, beta),
+        np.outer(STRESS_SHOCKS, beta),
         columns=beta.index,
-        index=dates,
+        index=pd.date_range("2008-09-15", periods=len(STRESS_SHOCKS)),
     )
     return pd.DataFrame(
         {
             "ai": shocked_assets @ pd.Series(weights),
-            "index": pd.Series(shocks, index=shocked_assets.index),
+            "index": pd.Series(STRESS_SHOCKS, index=shocked_assets.index),
         }
     )
 
@@ -359,26 +312,17 @@ current_volatility = market_volatility(returns).iloc[-1]
 volatility_threshold = market_volatility(returns).dropna().quantile(0.9)
 stress_active = is_stress_regime(returns)
 
-scenario_name = st.sidebar.selectbox(
-    "Regional stress scenario",
-    options=list(SCENARIO_MARKETS),
-    index=0,
-)
-scenario_returns = load_scenario_returns(
-    SCENARIO_MARKETS[scenario_name], returns.index.min(), returns.index.max()
-)
-
-st.subheader(f"Illustrative {scenario_name} crisis replay")
+st.subheader("Illustrative 2008-style crisis replay")
 st.caption(
-    f"This is a scenario replay, not a claim of historical AI performance in "
-    f"{scenario_name}. It uses that index's worst observed {len(STRESS_SHOCKS)}-"
-    "day window and applies the assets' observed regional betas."
+    "This is a scenario example, not an actual 2008 backtest: these tickers "
+    "do not all have price history from 2008. The shock is applied through "
+    "their observed market betas."
 )
 stress_weights = apply_regime_filter(
     allocate(graph_centrality(graph), allocation_aggressiveness),
     True,
 )
-stress = stress_test(returns, stress_weights, scenario_returns)
+stress = stress_test(returns, stress_weights)
 stress_chart = (1 + stress).cumprod()
 stress_chart.columns = ["AI portfolio", EQUITY_LABEL]
 st.altair_chart(
