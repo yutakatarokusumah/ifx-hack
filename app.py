@@ -14,9 +14,8 @@ WINDOW = 60
 MIN_TRAIN = 120
 HORIZON = 5
 REBALANCE = 20
-STRESS_SHOCKS = np.array(
-    [-0.02, -0.04, -0.06, -0.05, -0.03, -0.04, -0.02, 0.01, 0.02, 0.03]
-)
+SENSITIVITY = 1.0
+AGGRESSIVENESS = 3.0
 
 st.set_page_config(layout="wide")
 st.title("AI-driven dynamic index")
@@ -58,7 +57,7 @@ def graph_centrality(graph: nx.Graph) -> dict[str, float]:
 
 @st.cache_data(max_entries=16)
 def backtest(
-    returns: pd.DataFrame, sensitivity: float, aggressiveness: float
+    returns: pd.DataFrame,
 ) -> pd.DataFrame:
     features = build_features(returns)
     equal = 1 / returns.shape[1]
@@ -76,11 +75,11 @@ def backtest(
         model.fit(train[FEATURE_COLUMNS], train["target"])
         predicted_vol = model.predict(features.loc[[date], FEATURE_COLUMNS])[0]
         crisis_level = np.clip(
-            (predicted_vol / train["target"].median() - 1) * sensitivity, 0, 1
+            (predicted_vol / train["target"].median() - 1) * SENSITIVITY, 0, 1
         )
 
         graph = build_graph(returns.iloc[position - WINDOW : position], crisis_level)
-        risk = allocate(graph_centrality(graph), aggressiveness)
+        risk = allocate(graph_centrality(graph), AGGRESSIVENESS)
         weights = {
             ticker: (1 - crisis_level) * equal + crisis_level * risk[ticker]
             for ticker in returns.columns
@@ -104,24 +103,6 @@ def performance(returns: pd.Series) -> tuple[float, float]:
     curve = (1 + returns).cumprod()
     drawdown = curve / curve.cummax() - 1
     return float(curve.iloc[-1] - 1), float(drawdown.min())
-
-
-def stress_test(
-    returns: pd.DataFrame, weights: dict[str, float]
-) -> pd.DataFrame:
-    market = returns.mean(axis=1)
-    beta = returns.cov().mean(axis=1) / market.var()
-    shocked_assets = pd.DataFrame(
-        np.outer(STRESS_SHOCKS, beta),
-        columns=returns.columns,
-        index=pd.date_range("2008-09-15", periods=len(STRESS_SHOCKS)),
-    )
-    return pd.DataFrame(
-        {
-            "ai": shocked_assets @ pd.Series(weights),
-            "index": shocked_assets.mean(axis=1),
-        }
-    )
 
 
 def performance_chart(curves: pd.DataFrame) -> alt.Chart:
@@ -179,22 +160,7 @@ if len(returns) <= MIN_TRAIN + HORIZON:
         "walk-forward backtest."
     )
     st.stop()
-vol_weight = st.sidebar.slider(
-    "AI crisis sensitivity",
-    min_value=0.0,
-    max_value=2.0,
-    value=1.0,
-    step=0.25,
-)
-allocation_aggressiveness = st.sidebar.slider(
-    "Allocation Aggressiveness",
-    min_value=1.0,
-    max_value=10.0,
-    value=3.0,
-    step=0.5,
-)
-
-results = backtest(returns, vol_weight, allocation_aggressiveness)
+results = backtest(returns)
 ai_return, ai_drawdown = performance(results["ai"])
 index_return, index_drawdown = performance(results["index"])
 crisis_results = results[results["crisis"]]
@@ -241,45 +207,15 @@ st.info(
     "use the backtest to judge whether protection helped on this dataset."
 )
 
-graph = build_graph(returns.tail(WINDOW), vol_weight)
+graph = build_graph(returns.tail(WINDOW), SENSITIVITY)
 centrality = dict(graph.degree(weight="weight"))
-
-st.subheader("Illustrative 2008-style crisis replay")
-st.caption(
-    "This is a scenario example, not an actual 2008 backtest: these tickers "
-    "do not all have price history from 2008. The shock is applied through "
-    "their observed market betas."
-)
-stress_weights = allocate(graph_centrality(graph), allocation_aggressiveness)
-stress = stress_test(returns, stress_weights)
-stress_chart = (1 + stress).cumprod()
-stress_chart.columns = ["AI portfolio", "Equal-weight index"]
-st.altair_chart(
-    performance_chart(stress_chart),
-    width="stretch",
-    theme=None,
-)
-stress_ai = performance(stress["ai"])
-stress_index = performance(stress["index"])
-stress_metrics = pd.DataFrame(
-    {
-        "AI portfolio": [stress_ai[0], stress_ai[1]],
-        "Equal-weight index": [stress_index[0], stress_index[1]],
-    },
-    index=["Scenario return", "Scenario max drawdown"],
-)
-st.dataframe(
-    stress_metrics.style.format("{:.2%}"),
-    width="stretch",
-    alt="Illustrative crisis scenario comparison",
-)
 
 st.subheader("Current allocation")
 allocation = pd.DataFrame(
     {
         "Equal-weight": 1 / len(centrality),
         "AI risk-adjusted": allocate(
-            graph_centrality(graph), allocation_aggressiveness
+            graph_centrality(graph), AGGRESSIVENESS
         ),
     }
 )

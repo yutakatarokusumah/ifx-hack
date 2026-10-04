@@ -3,7 +3,7 @@ import yfinance as yf
 
 
 TICKERS = ["0700.HK", "9988.HK", "3690.HK", "1810.HK", "9618.HK"]
-START_DATE = "2023-01-01"
+START_DATE = "1900-01-01"
 END_DATE = "2026-10-01"
 
 
