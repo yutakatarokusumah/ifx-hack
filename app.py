@@ -17,6 +17,14 @@ REBALANCE = 20
 SENSITIVITY = 1.0
 AGGRESSIVENESS = 3.0
 SAFE_HAVEN = "Cash"
+DISPLAY_NAMES = {
+    "0700.HK": "Tencent Holdings",
+    "9988.HK": "Alibaba Group",
+    "3690.HK": "Meituan",
+    "1810.HK": "Xiaomi Corporation",
+    "9618.HK": "JD.com",
+    SAFE_HAVEN: SAFE_HAVEN,
+}
 
 st.set_page_config(layout="wide")
 st.title("AI-driven dynamic index")
@@ -152,6 +160,10 @@ st.sidebar.caption(
     f"Available history: {available_start:%Y-%m-%d} to "
     f"{available_end:%Y-%m-%d}"
 )
+st.sidebar.markdown(
+    "**Basket companies:** Tencent Holdings, Alibaba Group, Meituan, "
+    "Xiaomi Corporation, JD.com, and Cash"
+)
 if start_date >= end_date:
     st.error("Choose a backtest range with at least two trading days.")
     st.stop()
@@ -221,6 +233,7 @@ allocation = pd.DataFrame(
         ),
     }
 )
+allocation.index = allocation.index.map(DISPLAY_NAMES)
 st.dataframe(
     allocation.style.format("{:.2%}"),
     width="stretch",
@@ -228,8 +241,9 @@ st.dataframe(
 )
 
 fig, ax = plt.subplots(figsize=(7, 4))
+display_graph = nx.relabel_nodes(graph, DISPLAY_NAMES)
 nx.draw(
-    graph,
+    display_graph,
     with_labels=True,
     node_color="#ff4b4b",
     node_size=[centrality[ticker] * 3000 for ticker in graph],
