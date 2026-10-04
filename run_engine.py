@@ -5,6 +5,10 @@ from sklearn.ensemble import RandomForestRegressor
 
 
 FEATURE_COLUMNS = ["vol_5d", "vol_20d", "vol_momentum"]
+SAFE_HAVEN = "Cash"
+BENCHMARK = "^HSI"
+VOLATILITY_WINDOW = 20
+REGIME_QUANTILE = 0.9
 
 
 def read_csv(path: str) -> pd.DataFrame:
@@ -28,7 +32,9 @@ def load_returns() -> tuple[pd.DataFrame, pd.Series]:
 def build_features(
     returns: pd.DataFrame, average_volume: pd.Series
 ) -> tuple[pd.DataFrame, pd.Series]:
-    market_returns = returns.mean(axis=1)
+    market_returns = returns.drop(
+        columns=[SAFE_HAVEN, BENCHMARK], errors="ignore"
+    ).mean(axis=1)
     features = pd.DataFrame(index=returns.index)
     features["vol_5d"] = market_returns.rolling(5).std()
     features["vol_20d"] = market_returns.rolling(20).std()
@@ -51,7 +57,9 @@ def train_model(features: pd.DataFrame, target: pd.Series) -> dict[str, float]:
 def calculate_centrality(
     returns: pd.DataFrame, short_volatility_weight: float
 ) -> dict[str, float]:
-    correlations = returns.corr()
+    correlations = returns.drop(
+        columns=[SAFE_HAVEN, BENCHMARK], errors="ignore"
+    ).corr().fillna(0)
     distances = np.sqrt(np.maximum(0, 2 * (1 - correlations)))
     adjusted_distances = distances * (1 - 0.5 * short_volatility_weight)
 
@@ -78,13 +86,48 @@ def allocate(
     return dict(zip(tickers, weights))
 
 
+def market_volatility(returns: pd.DataFrame) -> pd.Series:
+    risk_assets = returns.drop(
+        columns=[SAFE_HAVEN, BENCHMARK], errors="ignore"
+    )
+    return risk_assets.mean(axis=1).rolling(VOLATILITY_WINDOW).std()
+
+
+def is_stress_regime(returns: pd.DataFrame) -> bool:
+    volatility = market_volatility(returns).dropna()
+    if volatility.empty:
+        return False
+    return bool(volatility.iloc[-1] >= volatility.quantile(REGIME_QUANTILE))
+
+
+def apply_regime_filter(
+    weights: dict[str, float], allow_safe_haven: bool
+) -> dict[str, float]:
+    if allow_safe_haven or SAFE_HAVEN not in weights:
+        return weights
+
+    filtered = {ticker: weight for ticker, weight in weights.items() if ticker != SAFE_HAVEN}
+    total = sum(filtered.values())
+    if total <= 0:
+        raise ValueError("Cannot remove safe haven from an empty allocation.")
+    return {ticker: weight / total for ticker, weight in filtered.items()} | {
+        SAFE_HAVEN: 0.0
+    }
+
+
 def main() -> None:
     returns, average_volume = load_returns()
     features, target = build_features(returns, average_volume)
     importances = train_model(features, target)
     centrality = calculate_centrality(returns, importances["vol_5d"])
-    ai_weights = allocate(centrality)
-    naive_weights = {ticker: 1 / len(ai_weights) for ticker in ai_weights}
+    ai_weights = apply_regime_filter(
+        allocate(centrality), is_stress_regime(returns)
+    )
+    risk_assets = [ticker for ticker in ai_weights if ticker != SAFE_HAVEN]
+    naive_weights = {
+        ticker: 1 / len(risk_assets) if ticker in risk_assets else 0.0
+        for ticker in ai_weights
+    }
 
     print("=== AI Feature Importances (Explainability) ===")
     for feature, score in importances.items():

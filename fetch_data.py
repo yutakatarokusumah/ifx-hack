@@ -2,30 +2,32 @@ import pandas as pd
 import yfinance as yf
 
 
+# Hang Seng TECH-style HKEX basket; not the official index constituents.
 TICKERS = ["0700.HK", "9988.HK", "3690.HK", "1810.HK", "9618.HK"]
-START_DATE = "2023-01-01"
+BENCHMARK = "^HSI"
+SAFE_HAVEN = "Cash"
+START_DATE = "2000-01-01"
 END_DATE = "2026-10-01"
-
-
-def extract_field(data: pd.DataFrame, field: str) -> pd.DataFrame:
-    """Extract one field from yfinance's ticker-grouped result."""
-    return pd.DataFrame(
-        {ticker: data[ticker][field] for ticker in TICKERS}
-    ).dropna()
-
 
 def main() -> None:
     print("Downloading historical market data...")
     raw_data = yf.download(
-        TICKERS,
+        TICKERS + [BENCHMARK],
         start=START_DATE,
         end=END_DATE,
         group_by="ticker",
         auto_adjust=False,
     )
 
-    price_matrix = extract_field(raw_data, "Adj Close")
-    volume_matrix = extract_field(raw_data, "Volume")
+    columns = TICKERS + [BENCHMARK]
+    price_matrix = pd.DataFrame(
+        {ticker: raw_data[ticker]["Adj Close"] for ticker in columns}
+    ).dropna()
+    volume_matrix = pd.DataFrame(
+        {ticker: raw_data[ticker]["Volume"] for ticker in columns}
+    ).reindex(price_matrix.index)
+    price_matrix[SAFE_HAVEN] = 100.0
+    volume_matrix[SAFE_HAVEN] = 0.0
     price_matrix.to_csv("price_matrix.csv")
     volume_matrix.to_csv("volume_matrix.csv")
     print(f"Data saved successfully! Total trading days: {len(price_matrix)}")
