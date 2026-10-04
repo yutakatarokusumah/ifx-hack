@@ -24,10 +24,15 @@ REBALANCE = 20
 SAFE_HAVEN = "Cash"
 BENCHMARK = "^HSI"
 SCENARIO_MARKETS = {
+    "Hang Seng Index": "^HSI",
     "Shanghai Composite": "000001.SS",
-    "Taiwan Weighted Index": "^TWII",
+    "Singapore STI": "^STI",
 }
 BASKET_NAME = "Hang Seng Tech basket"
+EQUITY_LABEL = "Hang Seng Index (^HSI)"
+STRESS_SHOCKS = np.array(
+    [-0.02, -0.04, -0.06, -0.05, -0.03, -0.04, -0.02, 0.01, 0.02, 0.03]
+)
 
 st.set_page_config(layout="wide")
 st.title("AI-driven Hang Seng Tech index")
@@ -127,10 +132,7 @@ def graph_centrality(graph: nx.Graph) -> dict[str, float]:
 
 @st.cache_data(max_entries=16)
 def backtest(
-    returns: pd.DataFrame,
-    benchmark_returns: pd.Series,
-    sensitivity: float,
-    aggressiveness: float,
+    returns: pd.DataFrame, sensitivity: float, aggressiveness: float
 ) -> pd.DataFrame:
     features = build_features(returns)
     risk_assets = returns.drop(columns=[SAFE_HAVEN, BENCHMARK], errors="ignore")
@@ -174,7 +176,7 @@ def backtest(
                 (
                     day,
                     float(row[list(weights)] @ pd.Series(weights)),
-                    float(benchmark_returns.loc[day]),
+                    float(row[BENCHMARK]),
                     crisis,
                 )
             )
@@ -198,8 +200,7 @@ def stress_test(
 ) -> pd.DataFrame:
     risk_assets = returns.drop(columns=[SAFE_HAVEN, BENCHMARK], errors="ignore")
     aligned = risk_assets.join(scenario_returns.rename("scenario"), how="inner")
-    window = 10
-    if len(aligned) < window:
+    if len(aligned) < len(STRESS_SHOCKS):
         raise RuntimeError(
             "The selected regional scenario does not overlap enough with the "
             "portfolio history to build a stress replay."
@@ -209,18 +210,17 @@ def stress_test(
         lambda column: column.cov(market) / market.var()
     )
     beta[SAFE_HAVEN] = 0.0
-    shock_window = market.rolling(window).sum().dropna()
+    shock_window = market.rolling(len(STRESS_SHOCKS)).sum().dropna()
     shock_end = shock_window.index[shock_window.to_numpy().argmin()]
     shock_end_position = market.index.get_loc(shock_end)
     shocks = market.iloc[
-        shock_end_position - window + 1 : shock_end_position + 1
+        shock_end_position - len(STRESS_SHOCKS) + 1 : shock_end_position + 1
     ].to_numpy()
+    dates = pd.date_range("2008-09-15", periods=len(shocks))
     shocked_assets = pd.DataFrame(
         np.outer(shocks, beta),
         columns=beta.index,
-        index=market.index[
-            shock_end_position - window + 1 : shock_end_position + 1
-        ],
+        index=dates,
     )
     return pd.DataFrame(
         {
@@ -236,7 +236,10 @@ def performance_chart(curves: pd.DataFrame) -> alt.Chart:
     )
     color = alt.Color(
         "portfolio:N",
-        scale=alt.Scale(range=["#5b3fd1", "#8fb4ff"]),
+        scale=alt.Scale(
+            domain=["AI portfolio", EQUITY_LABEL],
+            range=["#5b3fd1", "#8fb4ff"],
+        ),
         legend=alt.Legend(title=None),
     )
     base = alt.Chart(data).encode(
@@ -251,7 +254,7 @@ def performance_chart(curves: pd.DataFrame) -> alt.Chart:
     )
     return base.mark_line(size=3).encode(
         strokeDash=alt.condition(
-            alt.datum.portfolio != "AI portfolio",
+            alt.datum.portfolio == EQUITY_LABEL,
             alt.value([6, 4]),
             alt.value([1, 0]),
         )
@@ -302,30 +305,7 @@ allocation_aggressiveness = st.sidebar.slider(
     step=0.5,
 )
 
-scenario_name = st.sidebar.selectbox(
-    "Regional benchmark",
-    options=list(SCENARIO_MARKETS),
-    index=0,
-)
-scenario_returns = load_scenario_returns(
-    SCENARIO_MARKETS[scenario_name], returns.index.min(), returns.index.max()
-)
-benchmark_returns = scenario_returns.reindex(returns.index).dropna()
-returns = returns.loc[benchmark_returns.index]
-if len(returns) <= MIN_TRAIN + HORIZON:
-    st.error(
-        f"The selected {scenario_name} does not overlap enough with the "
-        "portfolio history for the walk-forward backtest."
-    )
-    st.stop()
-
-benchmark_label = f"{scenario_name} ({SCENARIO_MARKETS[scenario_name]})"
-results = backtest(
-    returns,
-    benchmark_returns,
-    vol_weight,
-    allocation_aggressiveness,
-)
+results = backtest(returns, vol_weight, allocation_aggressiveness)
 ai_return, ai_drawdown = performance(results["ai"])
 index_return, index_drawdown = performance(results["index"])
 crisis_results = results[results["crisis"]]
@@ -336,19 +316,18 @@ ai_crisis, index_crisis = performance(crisis_results["ai"]), performance(
 st.subheader("Walk-forward backtest")
 st.caption(
     "Each prediction uses only data available before that rebalance. "
-    f"The blue benchmark is {benchmark_label}. "
-    f"The AI portfolio allocates only across the five {BASKET_NAME} "
-    "companies."
+    "The blue benchmark is the actual Hang Seng Index (^HSI); "
+    f"the AI portfolio allocates across the {BASKET_NAME} constituents."
 )
 chart = results[["ai", "index"]].add(1).cumprod()
-chart.columns = ["AI portfolio", benchmark_label]
+chart.columns = ["AI portfolio", EQUITY_LABEL]
 st.altair_chart(
     performance_chart(chart),
     width="stretch",
     theme=None,
 )
 
-spread = chart["AI portfolio"] - chart[benchmark_label]
+spread = chart["AI portfolio"] - chart[EQUITY_LABEL]
 st.area_chart(
     (spread * 100).rename("AI advantage versus index (%)"),
     y_label="Percentage-point difference",
@@ -358,7 +337,7 @@ st.area_chart(
 metrics = pd.DataFrame(
     {
         "AI portfolio": [ai_return, ai_drawdown, ai_crisis[0]],
-        benchmark_label: [index_return, index_drawdown, index_crisis[0]],
+        EQUITY_LABEL: [index_return, index_drawdown, index_crisis[0]],
     },
     index=["Total return", "Max drawdown", "Crisis-period return"],
 )
@@ -380,11 +359,20 @@ current_volatility = market_volatility(returns).iloc[-1]
 volatility_threshold = market_volatility(returns).dropna().quantile(0.9)
 stress_active = is_stress_regime(returns)
 
-st.subheader(f"{scenario_name} crisis replay")
+scenario_name = st.sidebar.selectbox(
+    "Regional stress scenario",
+    options=list(SCENARIO_MARKETS),
+    index=0,
+)
+scenario_returns = load_scenario_returns(
+    SCENARIO_MARKETS[scenario_name], returns.index.min(), returns.index.max()
+)
+
+st.subheader(f"Illustrative {scenario_name} crisis replay")
 st.caption(
-    f"This uses the worst observed 10-trading-day window in {benchmark_label} "
-    "and applies the five companies' observed regional betas. It is not a "
-    "claim of live or historical AI performance in that market."
+    f"This is a scenario replay, not a claim of historical AI performance in "
+    f"{scenario_name}. It uses that index's worst observed {len(STRESS_SHOCKS)}-"
+    "day window and applies the assets' observed regional betas."
 )
 stress_weights = apply_regime_filter(
     allocate(graph_centrality(graph), allocation_aggressiveness),
@@ -392,7 +380,7 @@ stress_weights = apply_regime_filter(
 )
 stress = stress_test(returns, stress_weights, scenario_returns)
 stress_chart = (1 + stress).cumprod()
-stress_chart.columns = ["AI portfolio", benchmark_label]
+stress_chart.columns = ["AI portfolio", EQUITY_LABEL]
 st.altair_chart(
     performance_chart(stress_chart),
     width="stretch",
@@ -403,7 +391,7 @@ stress_index = performance(stress["index"])
 stress_metrics = pd.DataFrame(
     {
         "AI portfolio": [stress_ai[0], stress_ai[1]],
-        benchmark_label: [stress_index[0], stress_index[1]],
+        EQUITY_LABEL: [stress_index[0], stress_index[1]],
     },
     index=["Scenario return", "Scenario max drawdown"],
 )
@@ -417,7 +405,7 @@ st.subheader("Current allocation")
 allocation = pd.DataFrame(
     {
         "Equal-weight": {
-            ticker: 1 / len(returns.columns.drop([SAFE_HAVEN, BENCHMARK]))
+            ticker: 1 / len(returns.columns.drop(SAFE_HAVEN))
             if ticker != SAFE_HAVEN
             else 0.0
             for ticker in centrality
