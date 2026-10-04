@@ -57,7 +57,9 @@ def train_model(features: pd.DataFrame, target: pd.Series) -> dict[str, float]:
 def calculate_centrality(
     returns: pd.DataFrame, short_volatility_weight: float
 ) -> dict[str, float]:
-    correlations = returns.drop(columns=BENCHMARK, errors="ignore").corr().fillna(0)
+    correlations = returns.drop(
+        columns=[SAFE_HAVEN, BENCHMARK], errors="ignore"
+    ).corr().fillna(0)
     distances = np.sqrt(np.maximum(0, 2 * (1 - correlations)))
     adjusted_distances = distances * (1 - 0.5 * short_volatility_weight)
 
