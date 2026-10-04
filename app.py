@@ -5,7 +5,6 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import streamlit as st
-import yfinance as yf
 from sklearn.ensemble import RandomForestRegressor
 
 from run_engine import (
@@ -40,31 +39,6 @@ st.caption(
 @st.cache_data
 def load_returns() -> pd.DataFrame:
     prices = pd.read_csv("price_matrix.csv", index_col=0, parse_dates=True)
-    if BENCHMARK not in prices.columns:
-        if prices.empty:
-            raise RuntimeError("price_matrix.csv contains no market data.")
-        try:
-            benchmark = yf.download(
-                BENCHMARK,
-                start=prices.index.min().date().isoformat(),
-                end=(prices.index.max() + pd.Timedelta(days=1)).date().isoformat(),
-                auto_adjust=False,
-                progress=False,
-            )
-            close = benchmark["Adj Close"]
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            prices[BENCHMARK] = close.reindex(prices.index)
-        except (KeyError, ValueError, OSError) as error:
-            raise RuntimeError(
-                "The benchmark ^HSI is missing from price_matrix.csv and could "
-                "not be downloaded. Run `fetch_data.py` to refresh the data."
-            ) from error
-        if prices[BENCHMARK].isna().all():
-            raise RuntimeError(
-                "The benchmark ^HSI could not be aligned with price_matrix.csv. "
-                "Run `fetch_data.py` to refresh the data."
-            )
     return prices.pct_change().dropna()
 
 
