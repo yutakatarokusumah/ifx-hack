@@ -156,6 +156,29 @@ def performance_chart(curves: pd.DataFrame) -> alt.Chart:
 
 
 returns = load_returns()
+available_start = returns.index.min().date()
+available_end = returns.index.max().date()
+start_date, end_date = st.sidebar.slider(
+    "Backtest date range",
+    min_value=available_start,
+    max_value=available_end,
+    value=(available_start, available_end),
+    format="YYYY-MM-DD",
+)
+st.sidebar.caption(
+    f"Available history: {available_start:%Y-%m-%d} to "
+    f"{available_end:%Y-%m-%d}"
+)
+if start_date >= end_date:
+    st.error("Choose a backtest range with at least two trading days.")
+    st.stop()
+returns = returns.loc[pd.Timestamp(start_date) : pd.Timestamp(end_date)]
+if len(returns) <= MIN_TRAIN + HORIZON:
+    st.error(
+        f"Choose at least {MIN_TRAIN + HORIZON + 1} trading days for the "
+        "walk-forward backtest."
+    )
+    st.stop()
 vol_weight = st.sidebar.slider(
     "AI crisis sensitivity",
     min_value=0.0,
